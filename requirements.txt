@@ -1,0 +1,7 @@
+streamlit
+torch
+torchvision
+pennylane
+joblib
+scikit-learn
+opencv-python-headless
