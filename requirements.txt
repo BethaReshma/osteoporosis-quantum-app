@@ -5,3 +5,5 @@ pennylane
 joblib
 scikit-learn
 opencv-python-headless
+numpy
+Pillow
