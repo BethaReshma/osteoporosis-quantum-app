@@ -1,12 +1,4 @@
 import streamlit as st
-
-# 1. UI CONFIGURATION
-st.set_page_config(page_title="Quantum Osteo AI", page_icon="🦴")
-
-# 2. SHOW LOADING STATUS
-placeholder = st.empty()
-placeholder.info("⏳ System is initializing... Downloading AI models...")
-
 import torch
 import torch.nn as nn
 import torchvision.models as models
@@ -14,7 +6,14 @@ import torchvision.transforms as transforms
 import pennylane as qml
 import joblib
 import numpy as np
-from PIL import Image, ImageOps
+from PIL import Image, ImageOps, ImageEnhance
+
+# 1. UI CONFIGURATION
+st.set_page_config(page_title="Quantum Osteo AI", page_icon="🦴")
+
+# 2. SHOW LOADING STATUS
+placeholder = st.empty()
+placeholder.info("⏳ System is initializing... Downloading AI models...")
 
 # 3. SETUP MODEL ARCHITECTURE
 N_QUBITS = 6
@@ -66,24 +65,20 @@ if error:
     st.error(f"❌ Error loading files: {error}")
     st.stop()
 
-# --- NEW LOGIC HELPER ---
-def get_prediction_probs(img_tensor):
-    """Returns raw probabilities for a specific image view"""
+# --- PREDICTION LOGIC ---
+def get_raw_probs(img_tensor):
     with torch.no_grad():
         feat_2048 = resnet(img_tensor).flatten(1).numpy()
-    
     feat_6 = scaler.transform(pca.transform(feat_2048))
-    
     xc = torch.tensor(feat_2048, dtype=torch.float32)
     xq = torch.tensor(feat_6, dtype=torch.float32)
     
     with torch.no_grad():
         out = model(xc, xq)
         probs = torch.softmax(out, 1)[0].detach().numpy()
-        
     return probs
 
-# --- MAIN APP UI (Visuals Unchanged) ---
+# --- MAIN APP UI ---
 st.title("🦴 Quantum-Enhanced Osteoporosis Detection")
 st.markdown("### Hybrid ResNet + Quantum CNN System")
 
@@ -96,29 +91,46 @@ if uploaded_file:
     if st.button("Analyze Bone Density"):
         with st.spinner("🧠 Quantum Circuit is processing..."):
             
-            # --- IMPROVED LOGIC: Weighted Zoom ---
+            # --- STRATEGY: CONTRAST BOOST + SENSITIVITY BIAS ---
+            
             t = transforms.Compose([
                 transforms.Resize((224, 224)), transforms.ToTensor(),
                 transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
             ])
 
-            # 1. Full Image (Standard view)
-            p_full = get_prediction_probs(t(image).unsqueeze(0))
+            # 1. Prediction on Normal Image
+            p1 = get_raw_probs(t(image).unsqueeze(0))
 
-            # 2. Zoomed View (Key for Osteopenia vs Osteoporosis)
-            # We crop the center 80% of the image to remove background noise
+            # 2. Prediction on High Contrast Image (Helps see bone porosity)
+            enhancer = ImageEnhance.Contrast(image)
+            img_contrast = enhancer.enhance(1.5) # Increase contrast by 50%
+            p2 = get_raw_probs(t(img_contrast).unsqueeze(0))
+
+            # 3. Prediction on Zoomed Crop (Focus on texture)
             w, h = image.size
-            img_zoom = image.crop((w*0.1, h*0.1, w*0.9, h*0.9)).resize((w, h))
-            p_zoom = get_prediction_probs(t(img_zoom).unsqueeze(0))
+            img_zoom = image.crop((w*0.15, h*0.15, w*0.85, h*0.85)).resize((w, h))
+            p3 = get_raw_probs(t(img_zoom).unsqueeze(0))
 
-            # 3. Weighted Average
-            # We give the Zoomed view 60% weight because texture details matter 
-            # more for distinguishing Osteopenia from Osteoporosis
-            final_probs = (p_full * 0.4) + (p_zoom * 0.6)
+            # 4. Average Ensemble
+            # Weights: Normal(30%), Contrast(30%), Zoom(40%)
+            avg_probs = (p1 * 0.3) + (p2 * 0.3) + (p3 * 0.4)
+
+            # 5. MEDICAL CALIBRATION (CRITICAL STEP)
+            # Problem: Model favors "Normal". 
+            # Solution: Apply a bias to boost Sensitivity for Osteoporosis.
+            # We multiply Osteoporosis score by 1.4 (40% boost) and Normal by 0.8 (20% penalty)
             
+            calibrated_probs = np.array(avg_probs) # Copy
+            calibrated_probs[2] = avg_probs[2] * 1.4  # Boost Osteoporosis
+            calibrated_probs[1] = avg_probs[1] * 1.1  # Slight Boost Osteopenia
+            calibrated_probs[0] = avg_probs[0] * 0.85 # Penalize Normal
+            
+            # Re-normalize to sum to 100%
+            final_probs = calibrated_probs / calibrated_probs.sum()
+
             # --- END LOGIC ---
 
-            # Display Results (Exact same UI)
+            # Results Display
             pred_idx = np.argmax(final_probs)
             lbl = CLASSES[pred_idx]
             conf = float(final_probs[pred_idx]) * 100
