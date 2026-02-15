@@ -14,7 +14,7 @@ import torchvision.transforms as transforms
 import pennylane as qml
 import joblib
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageOps # Added ImageOps for flipping
 
 # 3. SETUP MODEL ARCHITECTURE
 N_QUBITS = 6
@@ -43,7 +43,7 @@ class ParallelQuantumModel(nn.Module):
 # 4. LOAD RESOURCES (Cached)
 @st.cache_resource
 def load_system_resources():
-    # A. Load ResNet (The part that takes time to download)
+    # A. Load ResNet
     resnet = models.resnet50(weights=models.ResNet50_Weights.IMAGENET1K_V1)
     resnet = nn.Sequential(*list(resnet.children())[:-1])
     resnet.eval()
@@ -64,11 +64,31 @@ def load_system_resources():
 resnet, pca, scaler, model, error = load_system_resources()
 
 # 5. CLEAR LOADING MESSAGE & SHOW UI
-placeholder.empty() # Remove the "Initializing" message
+placeholder.empty()
 
 if error:
     st.error(f"❌ Error loading files: {error}")
     st.stop()
+
+# --- HELPER FUNCTION FOR SINGLE PREDICTION ---
+def get_single_prediction(img_tensor):
+    """Runs one pass of the model logic"""
+    # 1. ResNet Features
+    with torch.no_grad():
+        feat_2048 = resnet(img_tensor).flatten(1).numpy()
+    
+    # 2. Math Transformation (PCA + Scaler)
+    feat_6 = scaler.transform(pca.transform(feat_2048))
+    
+    # 3. Quantum Model Prediction
+    xc = torch.tensor(feat_2048, dtype=torch.float32)
+    xq = torch.tensor(feat_6, dtype=torch.float32)
+    
+    with torch.no_grad():
+        out = model(xc, xq)
+        probs = torch.softmax(out, 1)[0].detach().numpy()
+        
+    return probs
 
 # --- MAIN APP UI ---
 st.title("🦴 Quantum-Enhanced Osteoporosis Detection")
@@ -81,30 +101,39 @@ if uploaded_file:
     st.image(image, caption="Uploaded Image", use_column_width=True)
     
     if st.button("Analyze Bone Density"):
-        with st.spinner("🧠 Quantum Circuit is processing..."):
-            # A. Transform
+        with st.spinner("🧠 Quantum Circuit is processing (Running Logic with TTA)..."):
+            
+            # --- LOGIC CHANGE START: Test-Time Augmentation (TTA) ---
+            
+            # Base Transform
             t = transforms.Compose([
                 transforms.Resize((224, 224)), transforms.ToTensor(),
                 transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
             ])
-            img_t = t(image).unsqueeze(0)
+
+            # 1. Predict on Original Image
+            probs_1 = get_single_prediction(t(image).unsqueeze(0))
+
+            # 2. Predict on Flipped Image (Mirror)
+            img_flipped = ImageOps.mirror(image)
+            probs_2 = get_single_prediction(t(img_flipped).unsqueeze(0))
+
+            # 3. Predict on Zoomed Image (Center Crop 90%)
+            w, h = image.size
+            img_zoomed = image.crop((w*0.05, h*0.05, w*0.95, h*0.95)).resize((w, h))
+            probs_3 = get_single_prediction(t(img_zoomed).unsqueeze(0))
+
+            # 4. Average the results (Ensemble)
+            final_probs = (probs_1 + probs_2 + probs_3) / 3.0
             
-            # B. Extract
-            with torch.no_grad():
-                feat_2048 = resnet(img_t).flatten(1).numpy()
-            
-            # C. Predict
-            feat_6 = scaler.transform(pca.transform(feat_2048))
-            xc = torch.tensor(feat_2048, dtype=torch.float32)
-            xq = torch.tensor(feat_6, dtype=torch.float32)
-            
-            out = model(xc, xq)
-            probs = torch.softmax(out, 1)[0]
-            pred_idx = torch.argmax(probs).item()
+            # --- LOGIC CHANGE END ---
+
+            # Extract final values for display
+            pred_idx = np.argmax(final_probs)
             lbl = CLASSES[pred_idx]
-            conf = float(probs[pred_idx]) * 100
+            conf = float(final_probs[pred_idx]) * 100
             
-            # D. Result
+            # D. Result (Exact same UI as before)
             st.markdown("---")
             if lbl == "Normal":
                 st.success(f"### RESULT: Normal Bone Density")
@@ -117,6 +146,7 @@ if uploaded_file:
             
             st.write("#### Detailed Probability:")
             cols = st.columns(3)
-            cols[0].metric("Normal", f"{float(probs[0])*100:.1f}%")
-            cols[1].metric("Osteopenia", f"{float(probs[1])*100:.1f}%")
-            cols[2].metric("Osteoporosis", f"{float(probs[2])*100:.1f}%")
+            # Using final_probs instead of single probs
+            cols[0].metric("Normal", f"{float(final_probs[0])*100:.1f}%")
+            cols[1].metric("Osteopenia", f"{float(final_probs[1])*100:.1f}%")
+            cols[2].metric("Osteoporosis", f"{float(final_probs[2])*100:.1f}%")
