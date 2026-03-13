@@ -85,7 +85,7 @@ def get_prediction_probs(img_tensor):
 
 # --- MAIN APP UI (Visuals Unchanged) ---
 st.title("🦴 Quantum-Enhanced Osteoporosis Detection")
-st.markdown("### Hybrid ResNet + Quantum CNN System")
+st.markdown("### Hybrid ResNet + Quantum")
 
 uploaded_file = st.file_uploader("Upload X-Ray Image", type=['png', 'jpg', 'jpeg'])
 
@@ -138,3 +138,4 @@ if uploaded_file:
             cols[0].metric("Normal", f"{float(final_probs[0])*100:.1f}%")
             cols[1].metric("Osteopenia", f"{float(final_probs[1])*100:.1f}%")
             cols[2].metric("Osteoporosis", f"{float(final_probs[2])*100:.1f}%")
+
